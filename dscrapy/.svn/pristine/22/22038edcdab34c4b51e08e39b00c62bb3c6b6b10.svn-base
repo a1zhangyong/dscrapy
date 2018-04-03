@@ -1,0 +1,352 @@
+#coding=utf-8
+from django.http.response import HttpResponse
+from django.shortcuts import render
+from control.dscrapy_control import JobControl, TargetControl, QueueControl, TaskControl, LogControl, NodeControl, SpiderControl
+from app.models import Targets, Queue
+from datetime import datetime
+from web.constant.dscrapy_constant import DescrapyConstant
+from web.utils.egg_uploader import EggUploader
+from web.dto.result_json import ResultJson
+import sys
+reload(sys)
+sys.setdefaultencoding('utf-8')
+
+def include(request):
+    return render(request, 'include.html')
+def index(request):
+#     client_list = Redis.client_list()
+    context          = {}
+    context['hello'] = 'Hello World!'
+#     context['client'] = client_list[0]
+    return render(request, 'index.html', context)
+
+def welcome(request):
+#     client_list = Redis.client_list()
+    context          = {}
+    context['hello'] = 'Hello World!'
+#     context['client'] = client_list[0]
+    return render(request, 'welcome.html', context)
+
+def list_targets(request):
+    context = {}
+    tc = TargetControl()
+    all_targets = tc.get_all_targets()
+    context['result'] = all_targets
+    return render(request, 'targets_list.html', context)
+
+def del_target(request):
+    project = request.GET['project']
+    target_id = request.GET['target_id']
+    version = request.GET['version']
+    host_ip = request.GET['host_ip']
+    is_online = request.GET['is_online']
+    tc = TargetControl()
+    result = tc.del_target(target_id, project, host_ip, version, DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT, is_online)  #返回删除记录条数
+    tc.get_all_targets()    #重新加载配置
+    return HttpResponse(result.status_message)
+def to_add_target(request):
+    context = {}
+    return render(request, 'target_add.html', context)
+
+#添加target
+def add_target(request):
+    context = {}
+    target = Targets()
+    host_ip = request.GET['host_ip']
+    project_name = request.GET['project_name']
+    target.host_ip = host_ip
+    target.host_port = DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT
+    target.project_name = project_name
+    target.target_name = host_ip + "-" + project_name
+    target.status = 0
+    target.deleted = 0
+    target.create_time = datetime.now()
+    tc = TargetControl()
+    result = tc.add_target(target)
+    context['message'] = result.status_message
+    return render(request, 'target_add.html', context)
+
+def deploy_targets(request):
+    context = {}
+    request_ip = '0.0.0.0'
+    if request.META.has_key('HTTP_X_FORWARDED_FOR'):  
+        request_ip = request.META['HTTP_X_FORWARDED_FOR']  
+    else:  
+        request_ip = request.META['REMOTE_ADDR'] 
+    project_name = request.POST['project_name']
+    settings = request.POST['settings']
+    host_ip = request.POST['host_ip']
+    project_egg_file = request.FILES.get('project_egg')
+    if not project_egg_file:
+        context['message'] = '文件不能为空!'
+        return render(request, 'targets_list.html', context)
+    project_egg_version = project_egg_file.name.split(".")[0]
+    eu = EggUploader(project_egg_file, request_ip)
+    file_name = eu.upload()
+    if not file_name:
+        context['message'] = '文件上传失败!'
+        return render(request, 'targets_list.html', context)
+    host_port = DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT
+    tc = TargetControl()
+    result_json = tc.deploy_targets(project_name, settings, host_ip, host_port, file_name, project_egg_version)
+    tc = TargetControl()
+    all_targets = tc.get_all_targets()
+    context['result'] = all_targets
+    update_params = []
+    if result_json and len(result_json) > 0:
+        server_info = ""
+        for target_info in result_json:
+            param = {}
+            param['target_id'] = target_info['target_id']
+            param['target_status'] = 1  #将爬虫状态标志为已部署
+            param['latest_version'] = project_egg_version
+            update_params.append(param)
+            server_info += target_info['host_ip'] + "\t"
+        success_message = "成功部署%s个target，分别位于(%s)服务器上" %(len(result_json), server_info)
+        context['message'] = '部署成功[%s]!' %success_message
+    else:
+        context['message'] = '部署失败[%s]!' %result_json
+    tc.update_targets_status_and_version(update_params)
+    return render(request, 'targets_list.html', context)
+
+def ajax_deploy_targets(request):
+    project_name = request.GET['project_name']
+    settings = request.GET['settings']
+    host_ip = request.GET['host_ip']
+    host_port = DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT
+    tc = TargetControl()
+    result_json = tc.deploy_targets(project_name, settings, host_ip, host_port)
+    result_message = ""
+    if result_json and len(result_json) > 0:
+        server_info = ""
+        for target_info in result_json:
+            server_info += target_info['host_ip'] + "\t"
+        success_message = "成功部署%s个target，分别位于(%s)服务器上" %(len(result_json), server_info)
+        result_message = '部署成功[%s]!' %success_message
+    else:
+        result_message = '部署失败[%s]!' %result_json
+    return HttpResponse(result_message)
+
+def list_all_queues(request):
+    context = {}
+    qc = QueueControl()
+    result =  qc.list_queues()
+    context['result'] = result
+    return render(request, 'queues_list.html', context)
+
+def to_add_queue(request):
+    context = {}
+    return render(request, 'queue_add.html', context)
+
+def add_queue(request):
+    context = {}
+    queue = Queue()
+    queue_name = request.GET['queue_name']
+    spider_name = request.GET['spider_name']
+    queue_ip = request.GET['queue_ip']
+    queue_db = request.GET['queue_db']
+    queue_describ = request.GET['queue_describ']
+    queue.queue_name = queue_name
+    queue.spider_name = spider_name
+    queue.queue_ip = queue_ip
+    queue.queue_port = DescrapyConstant.DEFAULT_DSCRAPY_REDIS_PORT
+    queue.queue_db = queue_db
+    queue.queue_describ = queue_describ
+    queue.create_time = datetime.now()
+    queue.deleted = DescrapyConstant.QUEUE_DELETED_NO
+    qc = QueueControl()
+    result = qc.add_queue(queue)
+    context['message'] = result.status_message
+    return render(request, 'queue_add.html', context)
+
+def del_queue(request):
+    queue_id = request.GET['queue_id']
+    qc = QueueControl()
+    result = qc.del_queue(queue_id)
+    return HttpResponse(result.status_message)
+
+def to_add_tasks(request):
+    context = {}
+    queue_id = request.GET['queue_id']
+    qc = QueueControl()
+    queue = qc.get_queue_by_id(int(queue_id))
+    context['result'] = queue
+    return render(request, 'tasks_add.html', context)
+
+#添加普通任务
+def add_normal_tasks(request):
+    queue_id = request.GET['queue_id']
+    queue_ip = request.GET['queue_ip']
+    queue_port = DescrapyConstant.DEFAULT_DSCRAPY_REDIS_PORT
+    queue_name = request.GET['queue_name']
+    queue_db = request.GET['queue_db']
+    tasks = request.GET['tasks']
+    params = {'host_ip': queue_ip, 'host_port': queue_port, 'db':queue_db, 'key':queue_name, 'tasks':tasks}
+    tc = TaskControl()
+    result = tc.add_normal_tasks(params)
+    
+    context = {}
+    qc = QueueControl()
+    queue = qc.get_queue_by_id(int(queue_id))
+    context['result'] = queue
+    context['message'] = result.status_message
+    return render(request, 'tasks_add.html', context)
+
+#添加带有优先级任务
+def add_priority_tasks(request):
+    return HttpResponse("<p>提交成功!</p>")
+
+#删除任务
+def del_tasks(request):
+    tasks = request.GET['tasks']
+    return HttpResponse("<p>提交成功!</p>")
+
+#清空所给队列的所有任务
+def clear_tasks(request):
+    queue = request.GET['queue']
+    return HttpResponse("<p>提交成功!</p>")
+
+#克隆job, 可以动态加载settings TODO
+def clone_job(request):
+    spider = request.GET['spider']
+    host_ip = request.GET['host_ip']
+    project =request.GET['project']
+    host_port = DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT
+    params = {'project':project, 'spider':spider, 'host_ip':host_ip, 'host_port':host_port}
+    jc = JobControl()
+    results = jc.start_jobs(params)
+    message = ''
+    if results and len(results) > 0:
+        result = results[0]
+        if result['status'] == 'ok':
+            message = '克隆成功'
+        else:
+            message = '克隆失败'
+    return HttpResponse(message)
+
+def to_add_job(request):
+    context = {}
+    sc = SpiderControl()
+    projects = sc.getAllProjects()
+    context['result'] = projects
+    return render(request, 'job_add.html', context)
+
+#新增job, 可以动态加载settings TODO
+def add_jobs(request):
+    context = {}
+    project = request.GET['project_name']
+    spider = request.GET['spider_name']
+    host_ip = request.GET['host_ip']
+    host_port = DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT
+    params = {'project':project, 'spider':spider, 'host_ip':host_ip, 'host_port':host_port}
+    jc = JobControl()
+    result_json = jc.start_jobs(params)
+    message = ''
+    if result_json and len(result_json) > 0:
+        success_count = 0
+        success_server = ''
+        fail_count = 0
+        fail_server = ''
+        for target_info in result_json:
+            if target_info['status'] == 'ok':
+                success_count += 1
+                success_server += target_info['host_ip'] + "\t"
+            else:
+                fail_count += 1
+                fail_server += target_info['host_ip'] + "\t"
+        message = "成功%s个，位于{%s}服务器上, 失败%s个, 位于{%s}服务器上" %(success_count, success_server, fail_count, fail_server)
+    else:
+        message = '运行失败!'
+    context['message'] = message
+    return render(request, 'job_add.html', context)
+
+#取消job
+def cancel_job(request):
+    project = request.GET['project']
+    job_id = request.GET['job_id']
+    host_ip = request.GET['host_ip']
+    host_port = DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT
+    params = {'project':project, 'job_id':job_id, 'host_ip':host_ip, 'host_port':host_port}
+    jc = JobControl()
+    result = jc.cancel_jobs(params)
+    return HttpResponse(result.status_message)
+    
+#list job   
+def list_jobs(request):
+    context = {}
+    project = request.GET['project']
+    host_ip = request.GET['host_ip']
+    host_port = DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT
+    params = {'project':project, 'host_ip':host_ip, 'host_port':host_port}
+    jc = JobControl()
+    result = jc.list_jobs(params)
+    context['result'] = result
+    return render(request, 'jobs_list.html', context)
+
+def list_all_jobs(request):
+    context = {}
+    jc = JobControl()
+    result = jc.list_all_jobs()
+    context['result'] = result
+    return render(request, 'jobs_list.html', context)
+
+def list_jobs_by_servers(request):
+    jc = JobControl()
+    spider_name = request.GET['spider_name']
+    project = request.GET['project']
+    host_ips = str(request.GET['host_ips'])
+    params = []
+    host_ip_list = host_ips.split(",")
+    for host_ip in host_ip_list:
+        if host_ip:
+            param = {'spider_name':spider_name, 'project':project, 'host_ip':host_ip, 'host_port': DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT}
+            params.append(param)
+    results = jc.list_jobs_by_servers(params)
+    result_str = ''
+    for result in results:
+        result_str += str(result) + "<br>"
+    return HttpResponse(result_str)
+
+
+def find_log(request):
+    project = request.GET['project']
+    spider_name = request.GET['spider_name']
+    host = request.GET['host_ip']
+    job_id = request.GET['job_id']
+    lc = LogControl()
+    result = lc.findLog(project, spider_name, host, DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT, job_id)
+    result = result.replace("\n", "<br>")
+    return HttpResponse("<p>" + result + "</p>")
+
+def list_nodes(request):
+    context = {}
+    nc = NodeControl()
+    nodes = nc.getNodesList()
+    context['result'] = nodes
+    return render(request, 'nodes_list.html', context)
+
+def list_spiders(request):
+    context = {}
+    sc = SpiderControl()
+    projects = sc.getAllProjects()
+    result_json = sc.list_all_spiders(projects)
+    context['result'] = result_json
+    return render(request, 'spiders_list.html', context)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

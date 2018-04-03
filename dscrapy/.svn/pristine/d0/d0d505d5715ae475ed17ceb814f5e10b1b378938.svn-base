@@ -1,0 +1,12 @@
+#coding=utf-8
+'''
+
+@author: zhangy
+'''
+class DescrapyConstant():
+    DEFAULT_DSCRAPY_SERVER_PORT = 6800 
+    DEFAULT_DSCRAPY_REDIS_PORT = 6379
+    DEFAULT_DSCRAPY_REDIS_DB = 0
+    DEFAULT_DSCRAPY_SETTINGS = "default"
+    
+    BASE_EGG_FILES_PATH = "egg_files_upload"

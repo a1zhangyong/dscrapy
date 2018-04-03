@@ -1,0 +1,7 @@
+#coding=utf-8
+'''
+@author: zhangy
+'''
+import requests
+response = requests.get("http://192.168.108.123:6800/logs/dscrapy/jd_detail/1ca498c0774411e79638005056c00008.log")
+print response.content

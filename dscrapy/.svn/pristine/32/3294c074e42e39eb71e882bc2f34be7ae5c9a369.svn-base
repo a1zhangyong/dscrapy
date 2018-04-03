@@ -1,0 +1,20 @@
+[settings]
+default = settings.default_settings
+jd = settings.jd_settings
+
+[deploy:127.0.0.1-dscrapy]
+url = http://127.0.0.1:6800
+project = dscrapy
+
+[deploy:127.0.0.1-test]
+url = http://127.0.0.1:6800
+project = test
+
+[deploy:127.0.0.1-zhangy]
+url = http://127.0.0.1:6800
+project = zhangy
+
+[deploy:192.168.108.123-zhangy]
+url = http://192.168.108.123:6800
+project = zhangy
+

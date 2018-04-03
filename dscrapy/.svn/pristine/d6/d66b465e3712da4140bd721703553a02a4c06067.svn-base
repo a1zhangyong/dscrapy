@@ -1,0 +1,68 @@
+#coding=utf-8
+'''
+@author: zhangy
+'''
+from scrapy.utils.conf import get_config, closest_scrapy_cfg
+import os
+import sys
+import glob
+import tempfile
+from scrapy.utils.python import retry_on_eintr
+from subprocess import check_call
+import time
+
+class EggBuilder():
+    
+    def __init__(self, file_path = None, settings = None):
+        self.file_path = file_path
+        self.settings_name = settings
+        self._SETUP_PY_TEMPLATE = \
+"""# Automatically created by: DeployCommand
+
+from setuptools import setup, find_packages
+
+setup(
+    name         = 'project',
+    version      = '1.0',
+    packages     = find_packages(),
+    entry_points = {'scrapy': ['settings = %(settings)s']},
+)
+"""
+    
+    def build(self):
+        closest = closest_scrapy_cfg()
+        os.chdir(os.path.dirname(closest))
+        if not os.path.exists('setup.py'):
+            if not self.settings_name:
+                self.settings_name = 'default'
+            settings = get_config().get('settings', self.settings_name)
+            self._create_default_setup_py(settings=settings)
+            print 'build egg use [%s] settings' %self.settings_name
+        if not self.file_path:
+            self.file_path = tempfile.mkdtemp(prefix="scrapydeploy-")
+        else:
+            if not os.path.exists(self.file_path):
+                os.mkdir(self.file_path)
+        d = self.file_path
+        o = open(os.path.join(d, "stdout"), "wb")
+        e = open(os.path.join(d, "stderr"), "wb")
+        retry_on_eintr(check_call, [sys.executable, 'setup.py', 'clean', '-a', 'bdist_egg', '-d', d], stdout=o, stderr=e)
+        o.close()
+        e.close()
+        egg = glob.glob(os.path.join(d, '*.egg'))[0]
+        self._rename_egg_name(egg, d)
+        
+    def _get_version(self):
+        return str(int(time.time()))
+    
+    def _create_default_setup_py(self, **kwargs):
+        with open('setup.py', 'w') as f:
+            f.write(self._SETUP_PY_TEMPLATE % kwargs)
+    
+    def _rename_egg_name(self, file_name, file_path):
+        os.rename(file_name, os.path.join(file_path, self._get_version() + ".egg")) 
+        print os.path.join(file_path, self._get_version() + ".egg")
+
+            
+eb = EggBuilder("c://test")
+eb.build()

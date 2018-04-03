@@ -1,0 +1,38 @@
+#coding=utf-8
+'''
+@author: zhangy
+'''
+from django.db.models.query import QuerySet
+
+from app.models import Targets
+import utils
+
+def listAll():
+    return Targets.objects.filter(deleted = 0)
+
+def getAllNodes():
+    query = Targets.objects.filter(deleted = 0).query 
+    query.group_by = ['host_ip', 'project_name'] 
+    return QuerySet(query = query, model = Targets)
+
+def addTarget(target):
+    target.save()
+    
+def getTargetsByProjectName(projectName):
+    return Targets.objects.filter(project_name = projectName)
+
+def getTargetsByProjectNameAndServer(projectName, server_ip, server_port):
+    kwargs = {'project_name':projectName, 'host_ip': server_ip, 'host_port': server_port, 'deleted': 0}
+    return Targets.objects.filter(**kwargs)
+
+def delTarget(target_id):
+    return Targets.objects.filter(id = target_id).update(deleted = 1)
+
+
+
+
+
+
+
+
+

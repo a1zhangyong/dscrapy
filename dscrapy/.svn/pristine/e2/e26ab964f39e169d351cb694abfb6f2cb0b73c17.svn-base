@@ -1,0 +1,21 @@
+#coding=utf-8
+'''
+@author: zhangy
+'''
+
+from app.models import Queue
+
+
+def listAll():
+    return Queue.objects.all()
+
+
+def addQueue(queue):
+    queue.save()
+    
+def getById(queue_id):
+    return Queue.objects.get(id = queue_id)
+
+def queryByServerAndQueueNameAndDb(queue_name, queue_ip, queue_port, queue_db):
+    kwargs = {'queue_name':queue_name, 'queue_ip': queue_ip, 'queue_port': queue_port, 'queue_db':queue_db}
+    return Queue.objects.filter(**kwargs)

@@ -1,0 +1,12 @@
+{% load static %}
+<link rel="stylesheet" type="text/css" href="{% static 'css/H-ui.min.css' %}" />
+<link rel="stylesheet" type="text/css" href="{% static 'css/H-ui.admin.css' %}" />
+<link rel="stylesheet" type="text/css" href="{% static 'css/font/iconfont.css' %}" />
+<link rel="stylesheet" type="text/css" href="{% static 'skin/default/skin.css' %}" id="skin" />
+<link rel="stylesheet" type="text/css" href="{% static 'css/style.css' %}" />
+<script type="text/javascript" src="{% static 'js/jquery.min.js' %}"></script> 
+<script type="text/javascript" src="{% static 'js/layer.js' %}"></script>
+<script type="text/javascript" src="{% static 'js/H-ui.min.js' %}"></script>
+<script type="text/javascript" src="{% static 'js/H-ui.admin.js' %}"></script>
+
+<script type="text/javascript" src="{% static 'js/jquery.contextmenu.r2.js' %}"></script>

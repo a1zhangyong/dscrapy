@@ -1,0 +1,65 @@
+function load_line_chart(url, id) {
+	var myChart = echarts.init(document.getElementById(id));
+	$.get(url).done(function(result) {
+		result = result.data
+	    option = {
+	    	    title: {
+	    	        text: '任务消费情况折线图'
+	    	    },
+	    	    color:['#61a0a8', '#d48265', '#91c7ae', '#749f83'],
+	    	    tooltip : {
+	    	        trigger: 'axis',
+	    	        axisPointer: {
+	    	            type: 'cross',
+	    	            label: {
+	    	                backgroundColor: '#6a7985'
+	    	            }
+	    	        }
+	    	    },
+	    	    legend: {
+	    	        data:['队列任务数', '抓取速度']
+	    	    },
+	    	    toolbox: {
+	    	        feature: {
+	    	            saveAsImage: {}
+	    	        }
+	    	    },
+	    	    grid: {
+	    	        left: '3%',
+	    	        right: '4%',
+	    	        bottom: '3%',
+	    	        containLabel: true
+	    	    },
+	    	    xAxis : [
+	    	        {
+	    	            type : 'category',
+	    	            boundaryGap : false,
+	    	            data : result == null ? [] : result.date
+	    	        }
+	    	    ],
+	    	    yAxis : [
+	    	        {
+	    	            type : 'value'
+	    	        }
+	    	    ],
+	    	    series : [
+	    	        {
+	    	            name:'队列任务数',
+	    	            type:'line',
+	    	            stack: '总量',
+	    	            areaStyle: {normal: {}},
+	    	            data:result == null ? [] : result.queue_data.data
+	    	        },
+	    	        {
+	    	            name:'抓取速度',
+	    	            type:'line',
+	    	            stack: '个数',
+	    	            areaStyle: {normal: {}},
+	    	            data:result == null ? [] : result.speed_data.data
+	    	        }
+	    	    ]
+	    	};
+	    myChart.setOption(option);
+	})
+}
+

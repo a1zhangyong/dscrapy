@@ -1,0 +1,315 @@
+#coding=utf-8
+'''
+@author: zhangy
+'''
+from scrapy.utils import conf
+from web.exception import JobException, TaskException, TargetException, QueueException
+from web.command.dscrapy_command import DscrapyCommand
+from web.command.deploy_command import DeployCommand
+from web.dao import TargetsDao, QueueDao
+import redis
+from web.net.connect_check import ConnectCheck
+
+
+class TargetControl():
+    
+    #从文件加载targets
+    def get_all_targets_from_file(self):
+        cfg = conf.get_config()
+        baset = dict(cfg.items('deploy')) if cfg.has_section('deploy') else {}
+        targets = {}
+        if 'url' in baset:
+            targets['default'] = baset
+        for x in cfg.sections():
+            if x.startswith('deploy:'):
+                t = baset.copy()
+                t.update(cfg.items(x))
+                targets[x[7:]] = t
+        return targets
+    
+    #从数据库加载targets
+    def get_all_targets(self):
+        all_targets = TargetsDao.listAll()
+        cfg = conf.get_config()
+        file_path = conf.get_sources()[len(conf.get_sources()) - 1]
+        for x in cfg.sections():    #先移除deploy配置
+            if x.startswith('deploy:'):
+                cfg.remove_section(x)
+        for target in all_targets:  #从数据库加载，写入文件
+            url = "http://" + target.host_ip + ":" + str(target.host_port)
+            cfg.add_section('deploy:' + target.target_name)  
+            cfg.set('deploy:' + target.target_name, 'url', url)
+            cfg.set('deploy:' + target.target_name, 'project', target.project_name)
+        cfg.write(open(file_path, 'w'))    
+        return all_targets
+    
+    #新增targets
+    def add_targets(self, targets):
+        if not targets:
+            raise TargetException('targets不能为空!')
+        for target in targets:
+            project_name = target.project_name
+            host_ip = target.host_ip
+            host_port = target.host_port
+            print 'host_port: ', host_port
+            if ConnectCheck.check_remote_port(host_ip, host_port):
+                exist_targets = TargetsDao.getTargetsByProjectNameAndServer(project_name, host_ip, host_port)
+                if exist_targets and len(exist_targets) > 0:
+                    raise TargetException('targets已经重复，添加失败!')
+                TargetsDao.addTarget(target)
+            else:
+                msg = '目标主机[%s]访问失败，添加失败!' %host_ip
+                print msg
+                raise TargetException(msg)
+        self._update_cfg(targets, True)
+
+    def update_targets_status(self, params):
+        for param in params:
+            target_id = param['target_id']
+            status = param['target_status']
+            TargetsDao.updateTargetStatus(target_id, status)
+    
+    #只是删除了数据库的target， 需要页面刷新一次才将配置文件中的target移除
+    def del_targets(self, target_id):
+        return TargetsDao.delTarget(target_id)
+    
+    def is_alive(self):
+        pass
+
+    def deploy_targets(self, project_name, settings, host_ip, host_port, file_name, project_egg_version):
+        targets = None
+        if not host_ip:
+            targets = TargetsDao.getTargetsByProjectName(project_name)
+        else:
+            targets = TargetsDao.getTargetsByProjectNameAndServer(project_name, host_ip, host_port)
+        dc = DeployCommand(targets, settings, file_name, project_egg_version)
+        return dc.start()
+
+    def _update_cfg(self, targets, is_append = False):
+        cfg = conf.get_config()
+        file_path = conf.get_sources()[len(conf.get_sources()) - 1]
+        if not is_append:
+            for x in cfg.sections():    #先移除deploy配置
+                if x.startswith('deploy:'):
+                    cfg.remove_section(x)
+            for target in targets:  #从数据库加载，写入文件
+                url = "http://" + target.host_ip + ":" + str(target.host_port)
+                cfg.add_section('deploy:' + target.target_name)  
+                cfg.set('deploy:' + target.target_name, 'url', url)
+            cfg.write(open(file_path, 'w'))  
+        else: 
+            for target in targets:  #从数据库加载，写入文件
+                url = "http://" + target.host_ip + ":" + str(target.host_port)
+                cfg.add_section('deploy:' + target.target_name)  
+                cfg.set('deploy:' + target.target_name, 'url', url)
+            cfg.write(open(file_path, 'a')) 
+
+class SpiderControl():
+    
+    #获取某一项目下所有的爬虫列表
+    def list_spiders(self, params):
+        project = params['project']
+        servers = params['servers']
+        return DscrapyCommand.list_spiders_cmd(self, project, servers)
+    
+
+#worker定义: 一个spider可以有多个worker
+class JobControl():
+    
+    JOB_STATUS_RUNNING = 1
+    JOB_STATUS_PENDING = 2
+    JOB_STATUS_FINISHED = 3
+    
+    #启动一个新的worker
+    def start_jobs(self, params):
+        result_list = []
+        if not params:
+            raise JobException('参数不能为空!')
+        project = params['project']
+        spider = params['spider']
+        host = params['host_ip']
+        port = params['host_port']
+        if not host:
+            targets = TargetsDao.getTargetsByProjectName(project)
+            for target in targets:
+                host = target.host_ip
+                port = target.host_port
+                result_json = eval(DscrapyCommand.start_job_cmd(project, spider, host, port))
+                print 'result_json: ', result_json
+                result_json['host_ip'] = host
+                result_json['host_port'] = port
+                result_list.append(result_json)
+        else:
+            result_json = eval(DscrapyCommand.start_job_cmd(project, spider, host, port))
+            result_json['host_ip'] = host
+            result_json['host_port'] = port
+            result_list.append(result_json)
+        return result_list
+    
+    #取消worker， 不可恢复
+    def cancel_jobs(self, params):
+        if not params:
+            raise JobException('参数不能为空!')
+        project = params['project']
+        job_id = params['job_id']
+        host = params['host_ip']
+        port = params['host_port']
+        return DscrapyCommand.cancel_job_cmd(project, job_id, host, port)
+    
+    #暂不展示结束和pending状态的job
+    def list_jobs(self, params):
+        if not params:
+            raise JobException('参数不能为空!')
+        project = params['project']
+        host = params['host_ip']
+        port = params['host_port']
+        result = eval(DscrapyCommand.list_jobs_cmd(project, host, port))
+        result_jsons = []
+        if result['status'] == 'ok':    #获取成功
+            running_list =result['running']
+            for running in running_list:
+                result_json = {}
+                result_json['project'] = project
+                result_json['host_ip'] = host
+                result_json['host_port'] = port
+                result_json['status'] = self.JOB_STATUS_RUNNING
+                result_json['job_id'] = running['id']
+                result_json['start_time'] = running['start_time']
+                result_json['spider'] = running['spider']
+                result_jsons.append(result_json)
+            pending_list = result['pending']
+            for rpending in pending_list:
+                result_json = {}
+                result_json['project'] = project
+                result_json['host_ip'] = host
+                result_json['host_port'] = port
+                result_json['status'] = self.JOB_STATUS_PENDING
+                result_json['job_id'] = rpending['id']
+                result_json['start_time'] = rpending['start_time']
+                result_json['spider'] = rpending['spider']
+                #result_jsons.append(result_json)
+            finished_list = result['finished']
+            for finished in finished_list:
+                result_json = {}
+                result_json['project'] = project
+                result_json['host_ip'] = host
+                result_json['host_port'] = port
+                result_json['status'] = self.JOB_STATUS_FINISHED
+                result_json['job_id'] = finished['id']
+                result_json['start_time'] = finished['start_time']
+                result_json['spider'] = finished['spider']
+                #result_jsons.append(result_json)
+        return result_jsons
+            
+    def list_all_jobs(self):
+        jobs_list = []
+        all_nodes = TargetsDao.getAllNodesByProjectName()
+        print 'all_nodes: ', all_nodes
+        for node in all_nodes:
+            host_ip = node["host_ip"]
+            host_port = node["host_port"]
+            project = node["project_name"]
+            result = eval(DscrapyCommand.list_jobs_cmd(project, host_ip, host_port))
+            if result and result.has_key('running'):
+                running_list = result['running']
+                for running in running_list:
+                    result_json = {}
+                    result_json['project'] = project
+                    result_json['host_ip'] = host_ip
+                    result_json['host_port'] = host_port
+                    result_json['status'] = self.JOB_STATUS_RUNNING
+                    result_json['job_id'] = running['id']
+                    result_json['start_time'] = running['start_time']
+                    result_json['spider'] = running['spider']
+                    jobs_list.append(result_json)
+            if result and result.has_key('finished'):
+                finished_list = result['finished']
+                for finished in finished_list:
+                    result_json = {}
+                    result_json['project'] = project
+                    result_json['host_ip'] = host_ip
+                    result_json['host_port'] = host_port
+                    result_json['status'] = self.JOB_STATUS_FINISHED
+                    result_json['job_id'] = finished['id']
+                    result_json['start_time'] = finished['start_time']
+                    result_json['spider'] = finished['spider']
+                    jobs_list.append(result_json)
+        return jobs_list
+            
+class TaskControl():
+    
+    #添加任务[无优先级]
+    def add_normal_tasks(self, params):
+        if not params:
+            raise TaskException('参数不能为空!')
+        host = params['host_ip']
+        port = params['host_port']
+        if not host or not port:
+            raise TaskException('队列服务器配置不能为空!')
+        db = params['db']
+        if not db:
+            db = 0
+        key = params['key']
+        tasks = params['tasks']
+        tasks_list = tasks.split(";")
+        Redis = redis.StrictRedis(host=host, port=port, db=db)
+        pang = Redis.ping()
+        if not pang:
+            raise TaskException('队列服务器连接异常!')
+        for task in tasks_list:
+            print Redis.lpush(key, task)    #默认插入到队列的最前面
+        #Redis.client_setname('jd_detail')
+    
+    def add_priority_tasks(self):
+        pass
+    
+    def del_tasks(self):
+        pass
+    
+    def clear_tasks(self):
+        pass
+    
+class QueueControl():
+    
+    def list_queues(self):
+        return QueueDao.listAll()
+    
+    def add_queue(self, queue):
+        queue_name = queue.queue_name
+        queue_ip = queue.queue_ip
+        queue_port = queue.queue_port
+        queue_db = queue.queue_db
+        queues = QueueDao.queryByServerAndQueueNameAndDb(queue_name, queue_ip, queue_port, queue_db)
+        if queues and len(queues) > 0:
+            raise QueueException('队列已存在,创建失败!')
+        try:
+            Redis = redis.StrictRedis(host=queue_ip, port=queue_port, db=queue_db, socket_connect_timeout=5)
+            Redis.ping()
+        except Exception as e:
+            raise QueueException('队列服务器连接异常,创建失败!')
+        QueueDao.addQueue(queue)
+        return True
+    
+    def get_queue_by_id(self, queue_id):
+        return QueueDao.getById(queue_id)
+        
+    def del_queue(self):
+        pass
+    
+    def update_queue(self):
+        pass
+    
+class LogControl():
+    def findLog(self, project, spider_name, host, port, job_id):
+        return DscrapyCommand.find_log_cmd(project, spider_name, job_id, host, port) 
+    
+class NodeControl():
+    def getNodesList(self):
+        return TargetsDao.getAllNodes()    
+    
+    
+    
+    
+    
+    
+    

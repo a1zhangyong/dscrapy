@@ -1,0 +1,23 @@
+#coding=utf8
+'''
+@author: zhangy
+'''
+
+from app.models import Monitor
+from datetime import datetime
+from utncommon import date
+ 
+ 
+def addMonitor(monitor):
+    monitor.save()
+     
+def findByQueueNameAndDate(queue_name, date_from, date_to):
+    kwargs = {'queue_name':queue_name, 'create_time__range':(date_from, date_to)}
+    return Monitor.objects.filter(**kwargs)
+ 
+def findRecentlyQueuesCount():
+    formatter = u"%Y-%m-%d %H:" + u"%s:00" %(datetime.now().minute / 10 * 10)
+    date_time = date.format_date(datetime.now(), formatter)
+    kwargs = {'create_time__gte':date_time}
+    return Monitor.objects.filter(**kwargs).order_by("-tasks_count")
+

@@ -1,0 +1,162 @@
+﻿{% include "include.html" %}
+{% load static %}
+<!DOCTYPE HTML>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="renderer" content="webkit|ie-comp|ie-stand">
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1.0,maximum-scale=1.0,user-scalable=no" />
+<meta http-equiv="Cache-Control" content="no-siteapp" />
+<!--[if lt IE 9]>
+<script type="text/javascript" src="lib/html5shiv.js"></script>
+<script type="text/javascript" src="lib/respond.min.js"></script>
+<![endif]-->
+<!--[if IE 6]>
+<script type="text/javascript" src="lib/DD_belatedPNG_0.0.8a-min.js" ></script>
+<script>DD_belatedPNG.fix('*');</script>
+<![endif]-->
+<title>节点列表</title>
+</head>
+<body class="pos-r">
+<div id="modal-demo" class="modal fade" tabindex="-1" role="dialog" aria-labelledby="myModalLabel" aria-hidden="true">
+	<div class="modal-dialog" style="width: 1200px;">
+		<div class="modal-content radius">
+			<div class="modal-header">
+				<h3 class="modal-title">log</h3>
+				<a class="close" data-dismiss="modal" aria-hidden="true" href="javascript:void();">×</a>
+			</div>
+			<div class="modal-body" id="log_content" style="overflow-y: auto; height: 600px;"></div>
+			<div class="modal-footer">
+				<button class="btn" data-dismiss="modal" aria-hidden="true" id="">关闭</button>
+			</div>
+		</div>
+	</div>
+</div>
+<div>
+	<nav class="breadcrumb"><i class="Hui-iconfont">&#xe67f;</i> 首页 <span class="c-gray en">&gt;</span> 节点管理 <span class="c-gray en">&gt;</span> 节点列表 <a class="btn btn-success radius r" style="line-height:1.6em;margin-top:3px" href="javascript:location.replace(location.href);" title="刷新" ><i class="Hui-iconfont">&#xe68f;</i></a></nav>
+	<div class="page-container">
+		<div class="text-c"> 日期范围：
+			<input type="text" onfocus="WdatePicker({ maxDate:'#F{$dp.$D(\'logmax\')||\'%y-%M-%d\'}' })" id="logmin" class="input-text Wdate" style="width:120px;">
+			-
+			<input type="text" onfocus="WdatePicker({ minDate:'#F{$dp.$D(\'logmin\')}',maxDate:'%y-%M-%d' })" id="logmax" class="input-text Wdate" style="width:120px;">
+			<input type="text" name="" id="" placeholder=" 产品名称" style="width:250px" class="input-text">
+			<button name="" id="" class="btn btn-success" type="submit"><i class="Hui-iconfont">&#xe665;</i> 搜索</button>
+		</div>
+		<div class="cl pd-5 bg-1 bk-gray mt-20"> 
+			<span class="l">
+				<a href="javascript:;" onclick="datadel()" class="btn btn-danger radius">
+					<i class="Hui-iconfont">&#xe6e2;</i> 批量删除
+				</a> 
+			</span> 
+			<span class="r">共有数据：<strong>{{result | length}}</strong> 条</span> </div>
+		<div class="mt-20">
+			<table class="table table-border table-bordered table-bg table-hover table-sort">
+				<thead>
+					<tr class="text-c">
+						<th width="40"><input name="" type="checkbox" value=""></th>
+						<th width="300">服务器ip</th>
+						<th>已上传项目列表</th>
+						<th width="100">操作</th>
+						
+					</tr>
+				</thead>
+				<tbody>
+					{% for node in result %}
+						<tr class="text-c va-m">
+							<td><input name="" type="checkbox" value=""></td>
+							<td class="text-l" host_ip='{{node.host_ip}}'>{{node.host_ip}}</td>
+							<td class="text-l">{{node.projects}}</td>
+							<td class="td-manage">
+								<a style="text-decoration:none" onClick="clone_job(this)" href="javascript:;" title="克隆job">
+									<i class="Hui-iconfont">&#xe6de;</i>
+								</a> 
+								<a style="text-decoration:none" class="ml-5" onClick="del_job(this)" href="javascript:;" title="删除">
+									<i class="Hui-iconfont">&#xe6e2;</i>
+								</a>
+								<a style="text-decoration:none" class="ml-5" onClick="show_log(this)" href="javascript:;" title="查看日志">
+									<i class="Hui-iconfont">&#xe643;</i>
+								</a>
+							</td>
+						</tr>
+					{% endfor %}
+				</tbody>
+			</table>
+		</div>
+	</div>
+</div>
+<!--请在下方写此页面业务相关的脚本-->
+<script type="text/javascript" src="{% static 'js/datepicker/WdatePicker.js' %}"></script> 
+<script type="text/javascript" src="{% static 'js/jquery.dataTables.min.js' %}"></script> 
+<script type="text/javascript" src="{% static 'js/laypage.js' %}"></script>
+<script type="text/javascript">
+$('.table-sort').dataTable({
+	"aaSorting": [[ 1, "desc" ]],//默认第几个排序
+	"bStateSave": true,//状态保存
+	"aoColumnDefs": [
+	  {"orderable":false,"aTargets":[0,2]}// 制定列不参与排序
+	]
+});
+
+function add_job(title,url){
+	var index = layer.open({
+		type: 2,
+		title: title,
+		content: url
+	});
+	layer.full(index);
+}
+
+function clone_job(obj,id){
+	$parent = $(obj).parent().parent()
+	spider = $parent.find("td[spider]").attr('spider')
+	host_ip = $parent.find("td[host_ip]").attr('host_ip')
+	host_port = $parent.find("td[host_port]").attr('host_port')
+	project = $parent.find("td[project]").attr('project')
+	params = {'spider':spider, 'host_ip':host_ip, 'host_port':host_port, 'project':project}
+	layer.confirm('确认要克隆吗？',function(index){
+		$.get("/clone/job.html", params, function(result) {
+			layer.msg(result,{icon:1,time:2000});
+		})
+	});
+}
+
+
+function del_job(obj,id){
+	$parent = $(obj).parent().parent()
+	job_id = $parent.find("td[job_id]").attr('job_id')
+	host_ip = $parent.find("td[host_ip]").attr('host_ip')
+	host_port = $parent.find("td[host_port]").attr('host_port')
+	project = $parent.find("td[project]").attr('project')
+	params = {'job_id':job_id, 'host_ip':host_ip, 'host_port':host_port, 'project':project}
+	layer.confirm('确认要删除吗？',function(index){
+		$.get("/del/job.html", params, function(result) {
+			$(obj).parents("tr").remove();
+			layer.msg(result,{icon:1,time:2000});
+		})
+	});
+}
+
+function show_log(obj) {
+	$parent = $(obj).parent().parent()
+	job_id = $parent.find("td[job_id]").attr('job_id')
+	host_ip = $parent.find("td[host_ip]").attr('host_ip')
+	spider_name = $parent.find("td[spider]").attr('spider')
+	project = $parent.find("td[project]").attr('project')
+	params = {'job_id':job_id, 'host_ip':host_ip, 'spider_name':spider_name, 'project':project}
+	$.get("/find/log.html", params, function(result) {
+		$("#log_content").html(result)
+		$("#modal-demo").modal("show")
+	})
+}
+
+</script>
+</body>
+</html>
+
+
+
+
+
+
+

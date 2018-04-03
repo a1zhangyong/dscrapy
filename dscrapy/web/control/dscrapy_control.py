@@ -1,0 +1,680 @@
+#coding=utf-8
+'''
+@author: zhangy
+'''
+import json
+
+from django.db.models.query import QuerySet
+import redis
+from scrapy.utils import conf
+from utils import date
+
+from web.command.deploy_command import DeployCommand
+from web.command.dscrapy_command import DscrapyCommand
+from web.constant.dscrapy_constant import DescrapyConstant
+from web.dao import TargetsDao, QueueDao, MonitorDao
+from web.dto.result_json import ResultJson
+from web.dto.spider_dto import SpiderDto
+from web.exception import JobException
+from web.net.connect_check import ConnectCheck
+
+
+class TargetControl():
+    
+    #从文件加载targets
+    def get_all_targets_from_file(self):
+        cfg = conf.get_config()
+        baset = dict(cfg.items('deploy')) if cfg.has_section('deploy') else {}
+        targets = {}
+        if 'url' in baset:
+            targets['default'] = baset
+        for x in cfg.sections():
+            if x.startswith('deploy:'):
+                t = baset.copy()
+                t.update(cfg.items(x))
+                targets[x[7:]] = t
+        return targets
+    
+    #从数据库加载targets
+    def get_all_targets(self):
+        all_targets = TargetsDao.listAll()
+        cfg = conf.get_config()
+        #file_path = conf.get_sources()[0]   #linux需用这个配置
+        file_path = conf.get_sources()[len(conf.get_sources()) - 1]
+        for x in cfg.sections():    #先移除deploy配置
+            if x.startswith('deploy:'):
+                cfg.remove_section(x)
+        for target in all_targets:  #从数据库加载，写入文件
+            url = "http://" + target.host_ip + ":" + str(target.host_port)
+            cfg.add_section('deploy:' + target.target_name)  
+            cfg.set('deploy:' + target.target_name, 'url', url)
+            cfg.set('deploy:' + target.target_name, 'project', target.project_name)
+            if ConnectCheck.check_remote_port(target.host_ip, target.host_port):
+                target.is_online = 1
+            else:
+                target.is_online = 0
+        cfg.write(open(file_path, 'w'))    
+        return all_targets
+    
+    #新增targets
+    def add_targets(self, targets):
+        result_json = ResultJson()
+        success_count = 0
+        fail_count = 0
+        success_servers = ""
+        fail_servers = ""
+        for target in targets:
+            project_name = target.project_name
+            host_ip = target.host_ip
+            host_port = target.host_port
+            if ConnectCheck.check_remote_port(host_ip, host_port):
+                exist_targets = TargetsDao.getTargetsByProjectNameAndServer(project_name, host_ip, host_port)
+                if exist_targets and len(exist_targets) > 0:
+                    result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+                    result_json.set_status_message("目标target已经存在, 添加失败!")
+                    return result_json
+                TargetsDao.addTarget(target)
+                self._update_cfg(target, True)
+                success_servers += host_ip + ","
+                success_count += 1
+            else:
+                fail_servers += host_ip + ","
+                fail_count += 1
+        msg = "成功部署%d台机器，分别位于{%s}, 失败%d台机器{reason:目标主机访问失败}，分别位于{%s}" %(success_count, success_servers, fail_count, fail_servers)
+        result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+        result_json.set_status_message(msg)
+        return result_json
+
+    def update_targets_status_and_version(self, params):
+        for param in params:
+            target_id = param['target_id']
+            status = param['target_status']
+            latest_version = param['latest_version']
+            TargetsDao.updateTargetStatusAndVersion(target_id, status, latest_version)
+    
+    def del_target(self, target_id, project, host_ip, version, host_port, is_online):
+        result_json = ResultJson()
+        if int(is_online) == 0:  #不在线
+            TargetsDao.delTarget(target_id)
+            result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+            result_json.set_status_message('删除成功!')
+            return result_json
+        is_stop_jobs = False
+        jobs_info = DscrapyCommand.list_jobs_cmd(project, host_ip, host_port)
+        if jobs_info['status'] == 'ok':     #job查询成功
+            running_jobs = jobs_info['running']
+            for running_job in running_jobs:
+                job_id = running_job['id']
+                result_message  = DscrapyCommand.cancel_job_cmd(project, job_id, host_ip, host_port)  #停止该target下的所有job
+                if result_message['status'] != 'ok':
+                    result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+                    result_json.set_status_message('%s任务停止失败, 删除失败!{%s}' %(job_id, result_message['message']))
+                    return result_json
+                is_stop_jobs = True
+        if is_stop_jobs:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message('已停止该项目下所有job, 请重新删除该target')
+            return result_json
+        delete_info = DscrapyCommand.del_spider_cmd(project, version, host_ip, host_port)
+        if delete_info['status'] == 'ok':
+            TargetsDao.delTarget(target_id)
+            result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+            result_json.set_status_message('删除成功!')
+        else:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message('删除失败!{%s}' %delete_info['message'])
+        return result_json
+    
+    def is_alive(self):
+        pass
+
+    def deploy_targets(self, project_name, settings, host_ip, host_port, file_name, project_egg_version):
+        targets = None
+        if not host_ip:
+            targets = TargetsDao.getTargetsByProjectName(project_name)
+        else:
+            targets = TargetsDao.getTargetsByProjectNameAndServer(project_name, host_ip, host_port)
+        dc = DeployCommand(targets, settings, file_name, project_egg_version)
+        return dc.start()
+
+    def _update_cfg(self, target, is_append = False):
+        cfg = conf.get_config()
+        #file_path = conf.get_sources()[0]   #linux需用这个配置
+        file_path = conf.get_sources()[len(conf.get_sources()) - 1]
+        if not is_append:
+            for x in cfg.sections():    #先移除deploy配置
+                if x.startswith('deploy:'):
+                    cfg.remove_section(x)
+            #从数据库加载，写入文件
+            url = "http://" + target.host_ip + ":" + str(target.host_port)
+            cfg.add_section('deploy:' + target.target_name)  
+            cfg.set('deploy:' + target.target_name, 'url', url)
+            cfg.write(open(file_path, 'w'))  
+        else: 
+            #从数据库加载，写入文件
+            url = "http://" + target.host_ip + ":" + str(target.host_port)
+            cfg.add_section('deploy:' + target.target_name)  
+            cfg.set('deploy:' + target.target_name, 'url', url)
+            cfg.write(open(file_path, 'a')) 
+
+    def getTargetsByProjectName(self, project_name):
+        result_json = ResultJson()
+        targets = TargetsDao.getDeployedTargetsByProjectName(project_name)
+        ips = []
+        for target in targets:
+            ip = target.host_ip
+            ips.append(ip)
+        result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+        result_json.set_data(ips)
+        return result_json
+
+class SpiderControl():
+    
+    #获取某一项目下所有的爬虫列表
+    def list_spiders(self, params):
+        project = params['project']
+        servers = params['servers']
+        return DscrapyCommand.list_spiders_cmd(self, project, servers)
+    
+    #获取所有节点上的spiders
+    def list_all_spiders(self, projects):
+        result_list = []
+        for project in projects:
+            result_json = {}
+            result_json['project'] = project['project_name']
+            project = project['project_name']
+            servers = []
+            nodes = TargetsDao.getServersByProjectName(project)
+            for node in nodes:
+                host_ip = node['host_ip']
+                host_port = node['host_port']
+                server = host_ip + ":" + host_port
+                servers.append(server)
+            result = DscrapyCommand.list_spiders_cmd(project, servers)
+            result_json['data'] = result
+            result_list.append(result_json)
+            
+        
+        return self._generate_spider_dto(result_list) 
+        
+    def _generate_spider_dto(self, result_json):
+        spider_dto_list = []
+        for result in result_json:  #projects
+            spider_list = []
+            project = result['project']
+            datas = result['data']
+            for data in datas:
+                spiders = data['spiders']
+                for spider in spiders:
+                    if not spider in spider_list:
+                        spider_list.append(spider)
+            for spider in spider_list:
+                spider_dto = SpiderDto()
+                spider_dto.set_project(project)
+                spider_dto.set_spider_name(spider)
+                servers = []
+                for data in datas:
+                    if spider in data['spiders']:
+                        server = data['ip']
+                        servers.append(server)
+                spider_dto.set_server_list(servers)
+                spider_dto_list.append(spider_dto)
+        return spider_dto_list
+    
+    def getAllProjects(self):
+        return TargetsDao.getAllProjects()
+    
+
+#worker定义: 一个spider可以有多个worker
+class JobControl():
+    
+    JOB_STATUS_RUNNING = 1
+    JOB_STATUS_PENDING = 2
+    JOB_STATUS_FINISHED = 3
+    
+    #启动一个新的worker
+    def start_jobs(self, params):
+        result_json = ResultJson()
+        result_list = []
+        if not params:
+            result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+            result_json.set_status_message("参数不能为空!")
+            return result_json
+        project = params['project']
+        spider = params['spider']
+        hosts = params['host_ips']
+        port = params['host_port']
+        if not hosts:
+            targets = TargetsDao.getDeployedTargetsByProjectName(project)
+            for target in targets:
+                host = target.host_ip
+                port = target.host_port
+                result_json = DscrapyCommand.start_job_cmd(project, spider, host, port)
+                result_json['host_ip'] = host
+                result_json['host_port'] = port
+                result_list.append(result_json)
+        else:
+            host_ip_array = hosts.split(",")
+            for host in host_ip_array:
+                if host:
+                    result_json = DscrapyCommand.start_job_cmd(project, spider, host, DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT)
+                    result_json['host_ip'] = host
+                    result_json['host_port'] = port
+                    result_list.append(result_json)
+        return result_list
+    
+    #删除job， 不可恢复
+    def cancel_jobs(self, params):
+        result_json = ResultJson()
+        if not params:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("参数不能为空!")
+            return result_json
+        success_count = 0
+        fail_count = 0
+        fail_servers = ""
+        for param in params:
+            project = param['project']
+            job_id = param['job_id']
+            host = param['host_ip']
+            port = param['host_port']
+            result = DscrapyCommand.cancel_job_cmd(project, job_id, host, port)
+            if result['status'] == 'ok':
+                success_count += 1
+            else:
+                fail_count += 1
+                fail_servers += host + ","
+        if fail_count > 0:
+            message = "失败%d个， 位于%s机器上!" %fail_count,fail_servers
+        else:
+            message = "删除成功!"
+        result_json.set_status_message(message)
+        result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+        return result_json
+    
+    #暂不展示结束和pending状态的job
+    def list_jobs(self, params):
+        if not params:
+            raise JobException('参数不能为空!')
+        project = params['project']
+        host = params['host_ip']
+        port = params['host_port']
+        result = DscrapyCommand.list_jobs_cmd(project, host, port)
+        result_jsons = []
+        if result['status'] == 'ok':    #获取成功
+            running_list =result['running']
+            for running in running_list:
+                result_json = {}
+                result_json['project'] = project
+                result_json['host_ip'] = host
+                result_json['host_port'] = port
+                result_json['status'] = self.JOB_STATUS_RUNNING
+                result_json['job_id'] = running['id']
+                result_json['start_time'] = running['start_time']
+                result_json['spider'] = running['spider']
+                result_jsons.append(result_json)
+            pending_list = result['pending']
+            for rpending in pending_list:
+                result_json = {}
+                result_json['project'] = project
+                result_json['host_ip'] = host
+                result_json['host_port'] = port
+                result_json['status'] = self.JOB_STATUS_PENDING
+                result_json['job_id'] = rpending['id']
+                result_json['start_time'] = rpending['start_time']
+                result_json['spider'] = rpending['spider']
+                #result_jsons.append(result_json)
+            finished_list = result['finished']
+            for finished in finished_list:
+                result_json = {}
+                result_json['project'] = project
+                result_json['host_ip'] = host
+                result_json['host_port'] = port
+                result_json['status'] = self.JOB_STATUS_FINISHED
+                result_json['job_id'] = finished['id']
+                result_json['start_time'] = finished['start_time']
+                result_json['spider'] = finished['spider']
+                #result_jsons.append(result_json)
+        return result_jsons
+    
+    def list_jobs_by_servers(self, params):
+        result_jsons = []
+        for param in params:
+            spider_name = param['spider_name']
+            project = param['project']
+            host = param['host_ip']
+            port = param['host_port']
+            result = DscrapyCommand.list_jobs_cmd(project, host, port)
+            if result['status'] == 'ok':    #获取成功
+                running_list =result['running']
+                for running in running_list:
+                    result_json = {}
+                    result_json['status'] = "running"
+                    result_json['job_id'] = running['id']
+                    result_json['start_time'] = running['start_time']
+                    spider = running['spider']
+                    if spider_name == spider:
+                        result_jsons.append(result_json)
+        return result_jsons
+        
+    def list_all_jobs(self):
+        jobs_list = []
+        all_nodes = TargetsDao.getAllNodesByProjectName()
+        for node in all_nodes:
+            host_ip = node["host_ip"]
+            host_port = node["host_port"]
+            project = node["project_name"]
+            result = DscrapyCommand.list_jobs_cmd(project, host_ip, host_port)
+            if result and result.has_key('running'):
+                running_list = result['running']
+                for running in running_list:
+                    result_json = {}
+                    result_json['project'] = project
+                    result_json['host_ip'] = host_ip
+                    result_json['host_port'] = host_port
+                    result_json['status'] = self.JOB_STATUS_RUNNING
+                    result_json['job_id'] = running['id']
+                    result_json['start_time'] = running['start_time']
+                    result_json['spider'] = running['spider']
+                    jobs_list.append(result_json)
+            if result and result.has_key('finished'):
+                finished_list = result['finished']
+                for finished in finished_list:
+                    result_json = {}
+                    result_json['project'] = project
+                    result_json['host_ip'] = host_ip
+                    result_json['host_port'] = host_port
+                    result_json['status'] = self.JOB_STATUS_FINISHED
+                    result_json['job_id'] = finished['id']
+                    result_json['start_time'] = finished['start_time']
+                    result_json['spider'] = finished['spider']
+                    #jobs_list.append(result_json)
+        return jobs_list
+            
+class TaskControl():
+    
+    #添加任务[无优先级]
+    def add_normal_tasks(self, params):
+        result_json = ResultJson()
+        if not params:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("参数不能为空!")
+            return result_json
+        host = params['host_ip']
+        port = params['host_port']
+        if not host or not port:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("队列服务器配置不能为空!")
+            return result_json
+        db = params['db']
+        if not db:
+            db = 0
+        key = params['key']
+        tasks = params['tasks']
+        tasks_list = tasks.split(";")
+        Redis = redis.StrictRedis(host=host, port=port, db=db)
+        pang = Redis.ping()
+        if not pang:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("队列服务器连接异常!")
+            return result_json
+        for task in tasks_list:
+            Redis.lpush(key, task)    #默认插入到队列的最前面
+        result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+        result_json.set_status_message("任务提交成功!")
+        return result_json
+        #Redis.client_setname('jd_detail')
+    
+    def submit_tasks(self, params):
+        result_json = ResultJson()
+        if not params:  #valid params
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("参数不能为空!")
+            return result_json
+        server = params['server']
+        db = params['db']
+        queue_name = params['queue_name']
+        tasks = params['tasks']
+        limit = params['limit']
+        data_type = params['data_type']
+        if data_type == DescrapyConstant.QUEUE_DATA_TYPE_HASH:      #如果提交hash, task需要转换成list
+            tasks = json.loads(tasks, encoding="UTF-8")
+        if server == DescrapyConstant.DEFAULT_DSCRAPY_REDIS_IP:     #只有提交任务时才计算总量
+            queues = QueueDao.findByQueueName(queue_name, db)
+            if not queues or queues.count() == 0:
+                result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+                result_json.set_status_message("未查询到名为[%s]的队列，请先添加队列" %queue_name)
+                return result_json
+            total_submit = queues[0].total_submit + len(tasks)
+            QueueDao.updateTotalSubmitById(queues[0].id, total_submit)
+        Redis = redis.StrictRedis(host=server, port=DescrapyConstant.DEFAULT_DSCRAPY_REDIS_PORT, db=db)
+        pang = Redis.ping() #测试队列服务器连通性
+        if not pang:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("队列服务器连接异常!")
+            return result_json
+        queue_count = 0
+        if data_type == DescrapyConstant.QUEUE_DATA_TYPE_LIST:
+            queue_count = Redis.llen(queue_name)
+        if data_type == DescrapyConstant.QUEUE_DATA_TYPE_HASH:
+            queue_count = Redis.hlen(queue_name)
+        if queue_count >= limit:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("队列剩余任务数已达上限，提交失败!")
+            return result_json
+        if queue_count + len(tasks) > limit:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("队列剩余任务数加上待提交任务数超过了任务上限，提交失败!")
+            return result_json
+        if data_type == DescrapyConstant.QUEUE_DATA_TYPE_LIST:
+            for task in tasks:
+                Redis.lpush(queue_name, task)    #默认插入到队列的最前面
+        if data_type == DescrapyConstant.QUEUE_DATA_TYPE_HASH:
+            for task in tasks:
+                for key,value in task.items():
+                    Redis.hset(queue_name, key, json.dumps(value, ensure_ascii=False))
+        result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+        result_json.set_status_message("任务提交成功，本次共提交%d条任务!" %len(tasks))
+        return result_json
+    def add_priority_tasks(self):
+        pass
+    
+    def del_tasks(self):
+        pass
+    
+    def clear_tasks(self):
+        pass
+    
+class QueueControl():
+    
+    def list_queues(self):
+        return QueueDao.listAll()
+    
+    def add_queue(self, queue):
+        result_json = ResultJson()
+        queue_name = queue.queue_name
+        queue_ip = queue.queue_ip
+        queue_port = queue.queue_port
+        queue_db = queue.queue_db
+        queues = QueueDao.queryByServerAndQueueNameAndDb(queue_name, queue_ip, queue_port, queue_db)
+        if queues and len(queues) > 0:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("队列已存在,创建失败!")
+            return result_json
+        try:
+            Redis = redis.StrictRedis(host=queue_ip, port=queue_port, db=queue_db, socket_connect_timeout=5)
+            Redis.ping()
+            QueueDao.addQueue(queue)
+            result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+            result_json.set_status_message("创建成功!")
+        except Exception as e:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("队列服务器连接异常,创建失败!")
+        return result_json
+    
+    def get_queue_by_id(self, queue_id):
+        return QueueDao.getById(queue_id)
+        
+    def del_queue(self, queue_id):
+        result_json = ResultJson()
+        queue = QueueDao.getById(queue_id)
+        try:
+            Redis = redis.StrictRedis(host=queue.queue_ip, port=queue.queue_port, db=queue.queue_db, socket_connect_timeout=5)
+            Redis.delete(queue.queue_name)
+            QueueDao.deleteQueue(queue_id)
+            result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+            result_json.set_status_message("删除成功!")
+        except Exception as e:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("队列服务器连接异常,删除失败!")
+        return result_json
+    
+    def update_queue(self):
+        pass
+    
+    def find_by_spider_name(self, spider_name):
+        queues = QueueDao.findBySpiderName(spider_name)
+        queue_names = []
+        for queue in queues:
+            queue_names.append(queue.queue_name)
+        return queue_names
+    
+    def get_lastest_queue(self):
+        return QueueDao.getLastestQueue()
+    
+class LogControl():
+    def findLog(self, project, spider_name, host, port, job_id):
+        return DscrapyCommand.find_log_cmd(project, spider_name, job_id, host, port) 
+    
+class NodeControl():
+    def getNodesList(self):
+        nodes_list = TargetsDao.getAllNodes()
+        for node in nodes_list:
+            host = node['host_ip']
+            port = node['host_port']
+            result_json = DscrapyCommand.list_projects_cmd(host, port)
+            if result_json and result_json['status'] == 'ok':
+                projects = result_json['projects']
+                node['projects'] = projects
+                jobs_count = 0
+                for project in projects:
+                    jobs = DscrapyCommand.list_jobs_cmd(project, host, DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT)
+                    if jobs['status'] == 'ok':     #job查询成功
+                        jobs_count += len(jobs['running'])
+                node['jobs'] = jobs_count
+        return nodes_list
+    
+    def getAllNodes(self):
+        return TargetsDao.getAllNodes()
+    
+    def getNodeProjectAndJobs(self, server):
+        result_json = ResultJson()
+        result = DscrapyCommand.list_projects_cmd(server, DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT)
+        projects = []
+        data = {}
+        jobs_info = []
+        total_jobs = 0
+        if result['status'] == 'ok':
+            projects = result['projects']
+            data["projects"] = projects
+            for project in projects:
+                jobs = DscrapyCommand.list_jobs_cmd(project, server, DescrapyConstant.DEFAULT_DSCRAPY_SERVER_PORT)
+                if jobs['status'] == 'ok':     #job查询成功
+                    jobs_count = len(jobs['running'])
+                    total_jobs += jobs_count
+                    job_info = {"project":project, "jobs_count":jobs_count}
+                    jobs_info.append(job_info)
+        data['total_jobs'] = total_jobs
+        data['jobs_info'] = jobs_info
+        result_json.set_data(data)
+        result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+        return result_json
+                    
+       
+    
+class MonitorControl():
+    def save_monitor(self, monitor):
+        MonitorDao.addMonitor(monitor)
+    
+    def get_monitors_by_queue_and_date(self, queue_name, search_date):
+        result_json = ResultJson()
+        date_from = None
+        date_to = None
+        if search_date == DescrapyConstant.DATE_TODAY:
+            date_from = date.today()
+            date_to = date.tomorrow()
+        elif search_date == DescrapyConstant.DATE_YESTERDAY:
+            date_from = date.yesterday()
+            date_to = date.today()
+        elif search_date == DescrapyConstant.DATE_LAST_7_DAYS:
+            date_from = date.get_old_date(date.today(), 7)
+            date_to = date.tomorrow()
+        elif search_date == DescrapyConstant.DATE_LAST_30_DAYS:
+            date_from = date.get_old_date(date.today(), 30)
+            date_to = date.tomorrow()
+        monitors = MonitorDao.findByQueueNameAndDate(queue_name, date_from, date_to)
+        result_data = {}
+        if monitors:
+            queue_data = {}
+            dates = []
+            datas = []
+            for monitor in monitors:
+                create_time = monitor.create_time
+                tasks_count = monitor.tasks_count
+                datas.append(tasks_count)
+                dates.append(date.format_date(create_time, u"%Y-%m-%d %H:%M"))
+            monitors_list = list(monitors)
+            speed_data = {}
+            works = []
+            works.append(0)
+            for i in range(len(monitors_list) - 1):
+                works.append(monitors_list[i].tasks_count - monitors_list[i+1].tasks_count if monitors_list[i].tasks_count - monitors_list[i+1].tasks_count > 0 else 0)
+            queue_data['data'] = datas
+            speed_data['data'] = works
+            result_data['queue_data'] = queue_data
+            result_data['speed_data'] = speed_data
+            result_data['date'] = dates
+            result_json.set_data(result_data)
+            result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+            result_json.set_status_message("success")
+        else:
+            result_json.set_status_code(ResultJson.STATUS_CODE_FAIL)
+            result_json.set_status_message("no data")
+        return result_json
+    
+    def getRecentlyQueuesMonitor(self):
+        result_json = ResultJson()
+        result_json.set_status_code(ResultJson.STATUS_CODE_SUCCESS)
+        result_json.set_status_message("success")
+        monitors = MonitorDao.findRecentlyQueuesCount()
+        old_monitors = MonitorDao.findLastTwoQueuesCount()
+        datas = []
+        for monitor in monitors:
+            data = {}
+            queue_name = monitor.queue_name
+            tasks_count = monitor.tasks_count
+            data['queue_name'] = queue_name
+            data['tasks_count'] = tasks_count
+            data['speed'] = 0
+            for old_monitor in old_monitors:
+                if old_monitor.queue_name == queue_name:
+                    old_tasks_count = old_monitor.tasks_count
+                    data['speed'] = old_tasks_count - tasks_count if old_tasks_count - tasks_count > 0 else 0 
+                    break
+            datas.append(data)
+        result_json.set_data(datas)
+        return result_json
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    

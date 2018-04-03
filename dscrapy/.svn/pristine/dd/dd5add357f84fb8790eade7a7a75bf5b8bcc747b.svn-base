@@ -1,0 +1,155 @@
+#coding=utf-8
+
+'''
+@author: zhangy
+'''
+from web.exception import DeployException
+import time
+from scrapy.utils.conf import get_config, closest_scrapy_cfg
+import os
+import sys
+import glob
+import tempfile
+from scrapy.utils.python import retry_on_eintr
+from subprocess import check_call
+from w3lib.form import encode_multipart
+import requests
+import json
+
+
+
+# deploy target
+class DeployCommand():
+        
+    def __init__(self, targets = [], settings = None, file_path = None, version = None):
+        if not targets:
+            pass
+            #raise DeployException("targets不能为空!")
+        self.egg = file_path
+        self.version = version
+        self.targets = targets
+        self.settings_name = settings
+        self._SETUP_PY_TEMPLATE = \
+"""# Automatically created by: DeployCommand
+
+from setuptools import setup, find_packages
+
+setup(
+    name         = 'project',
+    version      = '1.0',
+    packages     = find_packages(),
+    entry_points = {'scrapy': ['settings = %(settings)s']},
+)
+"""
+        
+    def start(self):
+        result_list = []
+        for target in self.targets:
+            result = self._build_egg_and_deploy_target(target)
+            if result:
+                result_json = eval(result)
+                result_json['host_ip'] = target.host_ip
+                result_json['host_port'] = target.host_port
+                result_list.append(result_json)
+        return result_list
+
+
+    def _get_version(self):
+        return str(int(time.time()))
+    
+    def _build_egg_and_deploy_target(self, target):
+        project = target.project_name
+        if not self.version:
+            self.version = self._get_version()
+        if not self.egg:
+            self.egg, tmpdir = self._build_egg()
+        print "Packing version %s" % self.version
+        return self._upload_egg(target, self.egg, project, self.version)
+    
+    def _build_egg(self):
+        closest = closest_scrapy_cfg()
+        os.chdir(os.path.dirname(closest))
+        if not os.path.exists('setup.py'):
+            if not self.settings_name:
+                self.settings_name = 'default'
+            settings = get_config().get('settings', self.settings_name)
+            self._create_default_setup_py(settings=settings)
+        d = tempfile.mkdtemp(prefix="scrapydeploy-")
+        o = open(os.path.join(d, "stdout"), "wb")
+        e = open(os.path.join(d, "stderr"), "wb")
+        retry_on_eintr(check_call, [sys.executable, 'setup.py', 'clean', '-a', 'bdist_egg', '-d', d], stdout=o, stderr=e)
+        o.close()
+        e.close()
+        egg = glob.glob(os.path.join(d, '*.egg'))[0]
+        print 'build egg use [%s] settings' %self.settings_name
+        return egg, d
+        
+    def _create_default_setup_py(self, **kwargs):
+        with open('setup.py', 'w') as f:
+            f.write(self._SETUP_PY_TEMPLATE % kwargs)
+            
+            
+    def _upload_egg(self, target, eggpath, project, version):
+        with open(eggpath, 'rb') as f:
+            eggdata = f.read()
+        data = {
+            'project': project,
+            'version': version,
+            'egg': ('project.egg', eggdata),
+        }
+        body, boundary = encode_multipart(data)
+        url = self._get_url(target)
+        headers = {
+            'Content-Type': 'multipart/form-data; boundary=%s' % boundary,
+            'Content-Length': str(len(body)),
+        }
+        
+        print 'Deploying to project "%s" in %s' % (project, url)
+        result = self._do_post(url, body, headers)
+        return result
+    
+    def _get_url(self, target):
+        host_ip = target.host_ip
+        host_port = str(target.host_port)
+        url = "http://" + host_ip + ":" + host_port + "/addversion.json"
+        return url
+        
+    def _do_post(self, url, body, headers):
+        try:
+            resonse = requests.post(url, data = body, headers = headers)
+            result = resonse.content.decode('utf-8')
+            print "Server response :%s" % result
+            return result
+        except DeployException as e:
+            print "Deploy failed (%s):" % e
+            resp = e.read().decode('utf-8')
+            try:
+                d = json.loads(resp)
+            except ValueError:
+                print(resp)
+            else:
+                if "status" in d and "message" in d:
+                    print("Status: %(status)s" % d)
+                    print("Message:\n%(message)s" % d)
+                else:
+                    print(json.dumps(d, indent=3))
+        return None
+    
+# targets = []
+# target = {}
+# target['project_name'] = '127.0.0.1-dscrapy1'
+# target['host_ip'] = '127.0.0.1'
+# target['host_port'] = 6800
+# targets.append(target)
+# settings = 'jd'
+dc = DeployCommand()
+print dc._build_egg()
+ 
+       
+        
+        
+        
+        
+        
+        
+        

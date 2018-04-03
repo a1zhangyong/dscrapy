@@ -1,0 +1,19 @@
+#coding=utf8
+'''
+@author: zhangy
+'''
+
+from app.models import Monitor
+ 
+ 
+def addMonitor(monitor):
+    monitor.save()
+     
+def findByQueueNameAndDate(queue_name, date_from, date_to):
+    kwargs = {'queue_name':queue_name, 'create_time__range':(date_from, date_to)}
+    print date_from, date_to
+    return Monitor.objects.filter(**kwargs)
+ 
+def findRecentlyQueuesCount():
+    pass
+

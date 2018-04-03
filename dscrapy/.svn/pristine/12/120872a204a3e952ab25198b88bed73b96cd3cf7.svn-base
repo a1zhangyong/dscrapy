@@ -1,0 +1,8 @@
+[settings]
+default = dscrapy.settings.default_settings
+jd = settings.jd_settings
+
+[deploy:dscrapy]
+url = http://127.0.0.1:6800
+project = dscrapy
+

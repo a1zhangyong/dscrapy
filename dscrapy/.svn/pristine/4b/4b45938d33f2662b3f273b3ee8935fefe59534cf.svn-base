@@ -1,0 +1,208 @@
+﻿{% include "include.html" %}
+{% load static %}
+<!DOCTYPE HTML>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="renderer" content="webkit|ie-comp|ie-stand">
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1.0,maximum-scale=1.0,user-scalable=no" />
+<meta http-equiv="Cache-Control" content="no-siteapp" />
+<!--[if lt IE 9]>
+<script type="text/javascript" src="lib/html5shiv.js"></script>
+<script type="text/javascript" src="lib/respond.min.js"></script>
+<![endif]-->
+<!--[if IE 6]>
+<script type="text/javascript" src="lib/DD_belatedPNG_0.0.8a-min.js" ></script>
+<script>DD_belatedPNG.fix('*');</script>
+<![endif]-->
+<title>target列表</title>
+</head>
+<body class="pos-r">
+<div id="modal-demo" class="modal fade" tabindex="-1" role="dialog" aria-labelledby="myModalLabel" aria-hidden="true">
+	<div class="modal-dialog">
+		<div class="modal-content radius">
+			<div class="modal-header">
+				<h3 class="modal-title">对话框标题<label style="color: red">(注:若需要将项目部署到所有可用的服务器上， ip需为空!)</label></h3>
+				<a class="close" data-dismiss="modal" aria-hidden="true" href="javascript:void();">×</a>
+			</div>
+			<div class="modal-body">
+				<form class="form form-horizontal" id="deploy_target_form" action="/deploy/targets.html" method="post" enctype="multipart/form-data">
+					<input type="hidden" value="{{result.id}}" name="queue_id">
+					<input type="hidden" value="{{message}}" id="message">
+					<div class="row cl">
+						<label class="form-label col-xs-4 col-sm-3"><span class="c-red">*</span>项目名称：</label>
+						<div class="formControls col-xs-8 col-sm-7">
+							<input type="text" class="input-text" value="" placeholder="" id="project_name" name="project_name">
+						</div>
+					</div>
+					<div class="row cl">
+						<label class="form-label col-xs-4 col-sm-3">所用配置：</label>
+						<div class="formControls col-xs-8 col-sm-7">
+							<input type="text" class="input-text" value="" placeholder="默认使用defalut配置" id="settions" name="settings">
+						</div>
+					</div>
+					<div class="row cl">
+						<label class="form-label col-xs-4 col-sm-3">服务器ip：</label>
+						<div class="formControls col-xs-8 col-sm-7">
+							<input type="text" class="input-text" value="" placeholder="" id="host_ip" name="host_ip">
+						</div>
+					</div>
+					<div class="row cl">
+						<label class="form-label col-xs-4 col-sm-3"><span class="c-red">*</span>项目包上传：</label>
+						<div class="formControls col-xs-8 col-sm-7">
+							<input type="file" class="input-text" value="" placeholder="" id="project_egg" name="project_egg">
+						</div>
+					</div>
+					<!-- <div class="row cl">
+						<label class="form-label col-xs-4 col-sm-2">服务器端口号：</label>
+						<div class="formControls col-xs-8 col-sm-9">
+							<input type="text" class="input-text" value="" placeholder="" id="host_port" name="host_port">
+						</div>
+					</div> -->
+				</form>
+			</div>
+			<div class="modal-footer">
+				<button class="btn btn-primary" type="button" id="submit_btn">确定</button>
+				<button class="btn" data-dismiss="modal" aria-hidden="true" id="">关闭</button>
+			</div>
+		</div>
+	</div>
+</div>
+<div>
+	<input type="hidden" value="{{message}}" id="message">
+	<nav class="breadcrumb"><i class="Hui-iconfont">&#xe67f;</i> 首页 <span class="c-gray en">&gt;</span> target管理 <span class="c-gray en">&gt;</span> target列表 <a class="btn btn-success radius r" style="line-height:1.6em;margin-top:3px" href="javascript:location.replace(location.href);" title="刷新" ><i class="Hui-iconfont">&#xe68f;</i></a></nav>
+	<div class="page-container">
+		<div class="text-c"> 日期范围：
+			<input type="text" onfocus="WdatePicker({ maxDate:'#F{$dp.$D(\'logmax\')||\'%y-%M-%d\'}' })" id="logmin" class="input-text Wdate" style="width:120px;">
+			-
+			<input type="text" onfocus="WdatePicker({ minDate:'#F{$dp.$D(\'logmin\')}',maxDate:'%y-%M-%d' })" id="logmax" class="input-text Wdate" style="width:120px;">
+			<input type="text" name="" id="" placeholder=" 产品名称" style="width:250px" class="input-text">
+			<button name="" id="" class="btn btn-success" type="submit"><i class="Hui-iconfont">&#xe665;</i> 搜产品</button>
+		</div>
+		<div class="cl pd-5 bg-1 bk-gray mt-20"> 
+			<span class="l">
+				<a href="javascript:;" onclick="datadel()" class="btn btn-danger radius">
+					<i class="Hui-iconfont">&#xe6e2;</i> 批量删除
+				</a> 
+				<a class="btn btn-primary radius" onclick="add_target('添加target','/toAdd/target.html')" href="javascript:;">
+					<i class="Hui-iconfont">&#xe600;</i> 添加target
+				</a>
+				<a class="btn btn-success radius" onClick="modaldemo()" href="javascript:;">
+					<i class="Hui-iconfont">&#xe64f;</i> 部署target
+				</a>
+			</span> 
+			<span class="r">共有数据：<strong>{{result | length}}</strong> 条</span> </div>
+		<div class="mt-20">
+			<table class="table table-border table-bordered table-bg table-hover table-sort">
+				<thead>
+					<tr class="text-c">
+						<th width="40"><input name="" type="checkbox" value=""></th>
+						<th width="70">ID</th>
+						<th width="200">项目名称</th>
+						<th width="200">target名称</th>
+						<th width="200">服务器ip</th>
+						<th width="200">版本号</th>
+						<th width="200">状态</th>
+						<th width="70">是否在线</th>
+						<th width="70">创建时间</th>
+						<th width="100">操作</th>
+						
+					</tr>
+				</thead>
+				<tbody>
+					{% for target in result %}
+						<tr class="text-c va-m">
+							<td><input name="" type="checkbox" value=""></td>
+							<td target_id={{target.id}}>{{target.id}}</td>
+							<td class="text-l" project_name="{{target.project_name}}">{{target.project_name}}</td>
+							<td class="text-l">{{target.target_name}}</td>
+							<td class="text-l" host_ip="{{target.host_ip}}">{{target.host_ip}}</td>
+							<td class="text-l" version="{{target.latest_version}}">{{target.latest_version}}</td>
+							{% ifequal target.status 0 %}
+								<td class="text-l"><i class="Hui-iconfont">&#xe649;</i>未部署</td>
+							{% endifequal %}
+							{% ifequal target.status 1 %}
+								<td class="text-l" style="color: green;"><i class="Hui-iconfont">&#xe680;</i>已部署</td>
+							{% endifequal %}
+							{% ifequal target.is_online 0 %}
+								<td class="text-l" is_online="0">否</td>
+							{% endifequal %}
+							{% ifequal target.is_online 1 %}
+								<td class="text-l" is_online="1">是</td> 
+							{% endifequal %}
+							<td class="text-l">{{target.create_time|date:"Y-m-d H:i:s"}}</td>
+							<td class="td-manage">
+								<a style="text-decoration:none" class="ml-5" onClick="del_target(this)" href="javascript:;" title="删除">
+									<i class="Hui-iconfont">&#xe6e2;</i>
+								</a>
+							</td>
+						</tr>
+					{% endfor %}
+				</tbody>
+			</table>
+		</div>
+	</div>
+</div>
+<!--请在下方写此页面业务相关的脚本-->
+<script type="text/javascript" src="{% static 'js/datepicker/WdatePicker.js' %}"></script> 
+<script type="text/javascript" src="{% static 'js/jquery.dataTables.min.js' %}"></script> 
+<script type="text/javascript" src="{% static 'js/laypage.js' %}"></script>
+<script type="text/javascript">
+var message = $("#message").val();
+if(message != "") {
+	layer.msg(message,{icon:1,time:5000});
+}
+$(document).ready(
+	$("#submit_btn").on("click", function() {
+		var project_name = $("#project_name").val()
+		if(project_name != '') {
+			$("#deploy_target_form").submit()
+		}else {
+			alert("任务名称不能为空!")
+			return false
+		}
+	})	
+)
+$('.table-sort').dataTable({
+	"aaSorting": [[ 1, "desc" ]],//默认第几个排序
+	"bStateSave": true,//状态保存
+	"aoColumnDefs": [
+	  {"orderable":false,"aTargets":[0,9]}// 制定列不参与排序
+	]
+});
+
+function add_target(title,url){
+	var index = layer.open({
+		type: 2,
+		title: title,
+		content: url
+	});
+	layer.full(index);
+}
+
+
+function modaldemo(){
+	$("#modal-demo").modal("show")
+}
+
+function del_target(obj){
+	$parent = $(obj).parent().parent()
+	target_id = $parent.find("td[target_id]").attr('target_id')
+	host_ip = $parent.find("td[host_ip]").attr('host_ip')
+	project = $parent.find("td[project_name]").attr('project_name')
+	version = $parent.find("td[version]").attr('version')
+	is_online = $parent.find("td[is_online]").attr('is_online')
+	params = {'target_id':target_id, 'version':version, 'host_ip':host_ip, 'project':project, 'is_online':is_online}
+	layer.confirm('确认要删除吗？(该操作会停止该target下的所有运行的job)',function(index){
+		$.get("/del/target.html", params, function(result) {
+			if(result == '删除成功!') {
+				$(obj).parents("tr").remove();
+			}
+			layer.msg(result,{icon:1,time:4000});
+		})
+	});
+}
+</script>
+</body>
+</html>

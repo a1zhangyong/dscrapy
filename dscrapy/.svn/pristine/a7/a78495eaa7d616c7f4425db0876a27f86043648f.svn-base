@@ -1,0 +1,5 @@
+#½¨±í
+python manage.py migrate   
+python manage.py makemigrations app  
+python manage.py migrate app   
+

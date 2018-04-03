@@ -1,0 +1,135 @@
+# -*- coding: utf-8 -*-
+
+from bs4 import BeautifulSoup
+from utils import date
+from scrapy_redis.spiders import RedisSpider
+from dscrapy.items.shop.i_jd import JDItem
+from dscrapy.settings.settings_run import my_settings
+
+class JDSpider(RedisSpider):
+    name = "jd_detail2"
+    redis_key = 'urls'
+    redis_batch_size = 5
+    
+    def __init__(self, *args, **kwargs):
+        self.settings = my_settings
+        super(RedisSpider, self).__init__(*args, **kwargs)
+    
+    #用beautifulsoup解析会出问题,有的html解析不到
+    def parse(self, response):
+        self.log('processed url is %s!' % response.url)
+        jd_item = JDItem()
+        if 'error' not in response.url:
+            soup = BeautifulSoup(response.body, 'html5lib')
+            is_success = 1
+            province_divs = soup.find_all("div", class_='j-shop-info')
+            if province_divs:
+                province = province_divs[0].find_all("span", class_='value')[0].string
+                jd_item['province'] = province 
+            else:
+                jd_item['province'] = ''
+            all_grades = ''
+            all_rate = ''
+            if soup.find_all("div", class_='total-score-view green'):   #低于同行业
+                all_grades = soup.find_all("p", class_='total-score-num')[0].find("span").string
+                all_rate = "-" + soup.find_all("p", class_='score-des')[0].find("span", class_='percent').string
+            elif soup.find_all("div", class_='total-score-view red '):  #高于同行业
+                all_grades = soup.find_all("p", class_='total-score-num')[0].find("span").string
+                all_rate = soup.find_all("p", class_='score-des')[0].find("span", class_='percent').string
+            jd_item['all_grades'] = all_grades
+            jd_item['all_rate'] = all_rate
+            
+            goods_grades = ''
+            goods_rate = ''
+            if soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[0].find("span", class_='f24 ce5393d score-180'): #高于同行业
+                goods_grades = soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[0].find("span", class_='f24 ce5393d score-180').string
+                goods_rate = soup.find_all("div", class_='j-score')[1].find_all("span", class_='percent')[0].string
+            elif soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[0].find("span", class_='f24 c82c161 score-180'): #低于同行业
+                goods_grades = soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[0].find("span", class_='f24 c82c161 score-180').string
+                goods_rate = '-' + soup.find_all("div", class_='j-score')[1].find_all("span", class_='percent')[0].string
+            jd_item['goods_grades'] = goods_grades
+            jd_item['goods_rate'] = goods_rate
+            
+            service_grades = ''
+            service_rate = ''
+            if soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[1].find("span", class_='f24 ce5393d score-180'): #高于同行业
+                service_grades = soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[1].find("span", class_='f24 ce5393d score-180').string
+                service_rate = soup.find_all("div", class_='j-score')[1].find_all("span", class_='percent')[1].string
+            elif soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[1].find("span", class_='f24 c82c161 score-180'): #低于同行业
+                service_grades = soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[1].find("span", class_='f24 c82c161 score-180').string
+                service_rate = '-' + soup.find_all("div", class_='j-score')[1].find_all("span", class_='percent')[1].string
+            jd_item['service_grades'] = service_grades
+            jd_item['service_rate'] = service_rate
+            
+            logistics_grades = ''
+            logistics_rate = ''
+            if soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[2].find("span", class_='f24 ce5393d score-180'): #高于同行业
+                logistics_grades = soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[2].find("span", class_='f24 ce5393d score-180').string
+                logistics_rate = soup.find_all("div", class_='j-score')[1].find_all("span", class_='percent')[2].string
+            elif soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[2].find("span", class_='f24 c82c161 score-180'): #低于同行业
+                logistics_grades = soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[2].find("span", class_='f24 c82c161 score-180').string
+                logistics_rate = '-' + soup.find_all("div", class_='j-score')[1].find_all("span", class_='percent')[2].string
+            jd_item['logistics_grades'] = logistics_grades
+            jd_item['logistics_rate'] = logistics_rate
+            
+            describ_grades = ''
+            describ_rate = ''
+            if soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[3].find("span", class_='f24 ce5393d score-180'): #高于同行业
+                describ_grades = soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[3].find("span", class_='f24 ce5393d score-180').string
+                describ_rate = soup.find_all("div", class_='j-score')[1].find_all("span", class_='percent')[3].string
+            elif soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[3].find("span", class_='f24 c82c161 score-180'): #低于同行业
+                describ_grades = soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[3].find("span", class_='f24 c82c161 score-180').string
+                describ_rate = '-' + soup.find_all("div", class_='j-score')[1].find_all("span", class_='percent')[3].string
+            jd_item['describ_grades'] = describ_grades
+            jd_item['describ_rate'] = describ_rate
+            
+            return_grades = ''
+            return_rate = ''
+            if soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[4].find("span", class_='f24 ce5393d score-180'): #高于同行业
+                return_grades = soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[4].find("span", class_='f24 ce5393d score-180').string
+                return_rate = soup.find_all("div", class_='j-score')[1].find_all("span", class_='percent')[4].string
+            elif soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[4].find("span", class_='f24 c82c161 score-180'): #低于同行业
+                return_grades = soup.find_all("div", class_='j-score')[1].find_all("div", class_='item-180 f14')[4].find("span", class_='f24 c82c161 score-180').string
+                return_rate = '-' + soup.find_all("div", class_='j-score')[1].find_all("span", class_='percent')[4].string
+            jd_item['return_grades'] = return_grades
+            jd_item['return_rate'] = return_rate
+            
+            process_data = soup.find_all("div", class_='j-score')[2].find_all("div", class_='item-90')[0].find_all('span', class_='f16 value')[0].string
+            process_data_average = soup.find_all("div", class_='j-score')[2].find_all("div", class_='item-90')[0].find_all('span', class_='f16 value')[1].string
+            
+            trade_data = soup.find_all("div", class_='j-score')[2].find_all("div", class_='item-90')[1].find_all('span', class_='f16 value')[0].string
+            trade_data_average = soup.find_all("div", class_='j-score')[2].find_all("div", class_='item-90')[1].find_all('span', class_='f16 value')[1].string
+            
+            #return_data = soup.find_all("div", class_='j-score')[2].find_all("div", class_='item-90')[2].find_all('span', class_='f16 value')[0].string
+            #return_data_average = soup.find_all("div", class_='j-score')[2].find_all("div", class_='item-90')[2].find_all('span', class_='f16 value')[1].string
+            
+            jd_item['process_data'] = process_data
+            jd_item['process_data_average'] = process_data_average
+            jd_item['trade_data'] = trade_data
+            jd_item['trade_data_average'] = trade_data_average
+            jd_item['return_data'] = ''
+            jd_item['return_data_average'] = ''
+            
+            break_law_times = int(soup.find_all('div', class_='j-score hegui-info')[0].find_all('a')[0].string)
+            jd_item['break_law_times'] = break_law_times
+            jd_item['detail_url'] = response.url
+            #jd_item['shop_url'] = self.shop_domain_map[response.url] 
+            print jd_item
+        else:
+            is_success = 0
+            jd_item['detail_url'] = ''
+            jd_item['shop_url'] = '' 
+        jd_item['is_success'] = is_success
+        jd_item['response_url'] = response.url
+        jd_item['create_time'] = date.get_now_time()
+        yield jd_item
+        
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,21 @@
+#依赖包,所有服务器都需要安装
+Django==1.11.3
+scrapy==1.3.0
+scrapyd==1.1.1
+scrapyd-client==1.1.0
+redis
+redispy
+scrapy-redis
+Twisted==16.6.0
+
+#远程管理linux,web服务器需要安装
+paramiko
+pycrypto
+
+#依赖脚本
+clean_log.sh	#job运行日志处理,每台服务器都要配
+scrapyd.conf	#scrapyd最大进程数配置,每台服务器都要配
+start_scrapy.sh	#启动scrapy服务,每台服务器都需要
+start_dscrapy.sh #启动dscrapy服务, web服务器需要
+log目录			#web服务运行时记录日志文件目录, web服务器需要
+定时任务统计脚本	#监听队列脚本, web服务器需要
